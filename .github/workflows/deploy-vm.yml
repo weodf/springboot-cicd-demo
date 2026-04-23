@@ -27,6 +27,7 @@ jobs:
       VM_HOST: ${{ secrets.VM_HOST }}
       VM_USER: ${{ secrets.VM_USER }}
       VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+      VM_SSH_PASSPHRASE: ${{ secrets.VM_SSH_PASSPHRASE }}
       VM_PORT: ${{ secrets.VM_PORT }}
       GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
       GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
@@ -48,6 +49,7 @@ jobs:
           host: "${{ secrets.VM_HOST }}"
           username: "${{ secrets.VM_USER }}"
           key: "${{ secrets.VM_SSH_KEY }}"
+          passphrase: "${{ secrets.VM_SSH_PASSPHRASE }}"
           port: "${{ secrets.VM_PORT }}"
           debug: true
           script: |
