@@ -43,13 +43,13 @@ jobs:
           test -n "${GHCR_TOKEN}" || { echo "GHCR_TOKEN is empty"; exit 1; }
 
       - name: Deploy latest GHCR image to VM
-        uses: appleboy/ssh-action@v1.2.0
+        uses: appleboy/ssh-action@v1.2.5
         with:
-          host: ${{ env.VM_HOST }}
-          username: ${{ env.VM_USER }}
-          key: ${{ env.VM_SSH_KEY }}
-          port: ${{ env.VM_PORT != '' && env.VM_PORT || '22' }}
-          script_stop: true
+          host: "${{ secrets.VM_HOST }}"
+          username: "${{ secrets.VM_USER }}"
+          key: "${{ secrets.VM_SSH_KEY }}"
+          port: "${{ secrets.VM_PORT }}"
+          debug: true
           script: |
             set -eu
 
@@ -59,7 +59,7 @@ jobs:
 
             mkdir -p "${APP_DIR}"
 
-            echo "${{ env.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ env.GHCR_USERNAME }}" --password-stdin
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
             docker pull "${IMAGE}"
 
             docker rm -f "${APP_NAME}" || true
