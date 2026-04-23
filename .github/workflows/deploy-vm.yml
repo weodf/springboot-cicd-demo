@@ -23,15 +23,32 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
+    env:
+      VM_HOST: ${{ secrets.VM_HOST }}
+      VM_USER: ${{ secrets.VM_USER }}
+      VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+      VM_PORT: ${{ secrets.VM_PORT }}
+      GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
 
     steps:
+      - name: Validate deployment secrets
+        run: |
+          set -eu
+
+          test -n "${VM_HOST}" || { echo "VM_HOST is empty"; exit 1; }
+          test -n "${VM_USER}" || { echo "VM_USER is empty"; exit 1; }
+          test -n "${VM_SSH_KEY}" || { echo "VM_SSH_KEY is empty"; exit 1; }
+          test -n "${GHCR_USERNAME}" || { echo "GHCR_USERNAME is empty"; exit 1; }
+          test -n "${GHCR_TOKEN}" || { echo "GHCR_TOKEN is empty"; exit 1; }
+
       - name: Deploy latest GHCR image to VM
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.VM_HOST }}
-          username: ${{ secrets.VM_USER }}
-          key: ${{ secrets.VM_SSH_KEY }}
-          port: ${{ secrets.VM_PORT || '22' }}
+          host: ${{ env.VM_HOST }}
+          username: ${{ env.VM_USER }}
+          key: ${{ env.VM_SSH_KEY }}
+          port: ${{ env.VM_PORT != '' && env.VM_PORT || '22' }}
           script_stop: true
           script: |
             set -eu
@@ -42,7 +59,7 @@ jobs:
 
             mkdir -p "${APP_DIR}"
 
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+            echo "${{ env.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ env.GHCR_USERNAME }}" --password-stdin
             docker pull "${IMAGE}"
 
             docker rm -f "${APP_NAME}" || true
