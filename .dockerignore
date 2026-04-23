@@ -1,0 +1,11 @@
+target/*.jar.original
+target/surefire-reports
+target/test-classes
+target/generated-sources
+target/generated-test-sources
+target/maven-status
+.git
+.github
+.idea
+.vscode
+.DS_Store

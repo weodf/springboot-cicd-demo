@@ -1,0 +1,66 @@
+name: Deploy To VM
+
+on:
+  workflow_run:
+    workflows:
+      - CD
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-vm-main
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy latest GHCR image to VM
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          port: ${{ secrets.VM_PORT || '22' }}
+          script_stop: true
+          script: |
+            set -eu
+
+            APP_NAME="springboot-cicd-demo"
+            IMAGE="ghcr.io/${{ github.repository_owner }}/springboot-cicd-demo:main"
+            APP_DIR="/opt/springboot-cicd-demo"
+
+            mkdir -p "${APP_DIR}"
+
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+            docker pull "${IMAGE}"
+
+            docker rm -f "${APP_NAME}" || true
+
+            docker run -d \
+              --name "${APP_NAME}" \
+              --restart unless-stopped \
+              -p 8080:8080 \
+              "${IMAGE}"
+
+            for i in $(seq 1 12); do
+              if curl -fsS http://127.0.0.1:8080/actuator/health | grep '"status":"UP"' >/dev/null; then
+                echo "Application is healthy."
+                exit 0
+              fi
+              sleep 5
+            done
+
+            echo "Health check failed."
+            docker logs "${APP_NAME}" || true
+            exit 1
