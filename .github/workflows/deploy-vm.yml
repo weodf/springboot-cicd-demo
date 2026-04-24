@@ -169,10 +169,19 @@ jobs:
             APP_NAME="${{ env.APP_NAME }}"
             APP_PORT="${{ env.APP_PORT }}"
             IMAGE="${{ env.IMAGE }}"
+            PREVIOUS_IMAGE=""
 
             mkdir -p "${APP_DIR}"
 
             echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+
+            if docker ps -a --format '{{.Names}}' | grep -Fx "${APP_NAME}" >/dev/null; then
+              PREVIOUS_IMAGE="$(docker inspect -f '{{.Config.Image}}' "${APP_NAME}")"
+              echo "Found existing container ${APP_NAME} using ${PREVIOUS_IMAGE}"
+            else
+              echo "No existing container found for ${APP_NAME}"
+            fi
+
             docker pull "${IMAGE}"
 
             docker rm -f "${APP_NAME}" || true
@@ -193,4 +202,26 @@ jobs:
 
             echo "Health check failed."
             docker logs "${APP_NAME}" || true
+
+            if [ -n "${PREVIOUS_IMAGE}" ]; then
+              echo "Rolling back to ${PREVIOUS_IMAGE}"
+              docker rm -f "${APP_NAME}" || true
+              docker run -d \
+                --name "${APP_NAME}" \
+                --restart unless-stopped \
+                -p "${APP_PORT}:8080" \
+                "${PREVIOUS_IMAGE}"
+
+              for i in $(seq 1 12); do
+                if curl -fsS "http://127.0.0.1:${APP_PORT}/actuator/health" | grep '"status":"UP"' >/dev/null; then
+                  echo "Rollback succeeded."
+                  exit 1
+                fi
+                sleep 5
+              done
+
+              echo "Rollback failed."
+              docker logs "${APP_NAME}" || true
+            fi
+
             exit 1
