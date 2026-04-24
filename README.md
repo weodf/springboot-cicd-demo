@@ -154,7 +154,8 @@ File:
 
 What CD does:
 
-- runs on push to `main`
+- runs automatically after `CI` succeeds on `main`
+- can also be triggered manually from GitHub Actions
 - builds the application jar
 - builds a Docker image
 - pushes the image to GitHub Container Registry (`ghcr.io`)
@@ -284,7 +285,7 @@ After pushing to GitHub:
 
 1. Open the repository `Actions` tab
 2. Confirm `CI` passed
-3. Confirm `CD` passed on `main`
+3. Confirm `CD` passed after `CI`
 4. Confirm `Deploy To VM` passed after `CD`
 5. Open the workflow artifact from `CI`
 6. Open the package list and verify the image was pushed to `ghcr.io`
