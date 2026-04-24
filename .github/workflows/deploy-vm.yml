@@ -83,6 +83,13 @@ jobs:
               esac
 
               test -n "${CHANGE_NUMBER}" || { echo "change_number is required for prod"; exit 1; }
+
+              case "${IMAGE_TAG}" in
+                main|"")
+                  echo "prod deployments must use a fixed image tag, not main"
+                  exit 1
+                  ;;
+              esac
               ;;
             *)
               echo "unsupported environment: ${TARGET_ENV}"
@@ -130,6 +137,21 @@ jobs:
           echo "APP_NAME=${APP_NAME}" >> "${GITHUB_ENV}"
           echo "APP_PORT=${APP_PORT}" >> "${GITHUB_ENV}"
           echo "IMAGE=ghcr.io/${{ github.repository_owner }}/springboot-cicd-demo:${IMAGE_TAG}" >> "${GITHUB_ENV}"
+
+      - name: Summarize deployment plan
+        run: |
+          {
+            echo "### Deployment Plan"
+            echo "- Environment: ${{ github.event.inputs.environment }}"
+            echo "- Source ref: ${{ github.ref_name }}"
+            echo "- Image tag: ${{ github.event.inputs.image_tag }}"
+            echo "- Image: ${{ env.IMAGE }}"
+            echo "- Container: ${{ env.APP_NAME }}"
+            echo "- Port: ${{ env.APP_PORT }}"
+            if [ "${{ github.event.inputs.environment }}" = "prod" ]; then
+              echo "- Change number: ${{ github.event.inputs.change_number }}"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Deploy selected GHCR image to VM
         uses: appleboy/ssh-action@v1.2.5
