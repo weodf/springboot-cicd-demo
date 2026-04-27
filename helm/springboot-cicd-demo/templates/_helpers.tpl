@@ -1,0 +1,33 @@
+{{- define "springboot-cicd-demo.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "springboot-cicd-demo.fullname" -}}
+{{- if .Values.fullnameOverride -}}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default .Chart.Name .Values.nameOverride -}}
+{{- if contains $name .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "springboot-cicd-demo.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "springboot-cicd-demo.labels" -}}
+helm.sh/chart: {{ include "springboot-cicd-demo.chart" . }}
+app.kubernetes.io/name: {{ include "springboot-cicd-demo.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
+{{- define "springboot-cicd-demo.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "springboot-cicd-demo.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}

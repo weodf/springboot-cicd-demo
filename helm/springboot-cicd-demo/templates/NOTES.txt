@@ -1,0 +1,8 @@
+1. Check the deployment:
+   kubectl get pods,svc
+
+2. Get the application service:
+   kubectl get svc {{ include "springboot-cicd-demo.fullname" . }}
+
+3. If using port-forward for quick local access:
+   kubectl port-forward svc/{{ include "springboot-cicd-demo.fullname" . }} 8080:{{ .Values.service.port }}

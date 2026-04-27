@@ -72,6 +72,13 @@ jobs:
                   exit 1
                   ;;
               esac
+
+              case "${IMAGE_TAG}" in
+                main|"")
+                  echo "${TARGET_ENV} deployments must use a fixed image tag, not main"
+                  exit 1
+                  ;;
+              esac
               ;;
             prod)
               case "${REF_NAME}" in
@@ -83,6 +90,15 @@ jobs:
               esac
 
               test -n "${CHANGE_NUMBER}" || { echo "change_number is required for prod"; exit 1; }
+
+              case "${CHANGE_NUMBER}" in
+                CHG-*)
+                  ;;
+                *)
+                  echo "change_number must start with CHG- for prod"
+                  exit 1
+                  ;;
+              esac
 
               case "${IMAGE_TAG}" in
                 main|"")
@@ -118,24 +134,29 @@ jobs:
             dev)
               APP_NAME="springboot-cicd-demo-dev"
               APP_PORT="8081"
+              APP_CANDIDATE_PORT="18081"
               ;;
             sit)
               APP_NAME="springboot-cicd-demo-sit"
               APP_PORT="8082"
+              APP_CANDIDATE_PORT="18082"
               ;;
             uat)
               APP_NAME="springboot-cicd-demo-uat"
               APP_PORT="8083"
+              APP_CANDIDATE_PORT="18083"
               ;;
             prod)
               APP_NAME="springboot-cicd-demo-prod"
               APP_PORT="8080"
+              APP_CANDIDATE_PORT="18080"
               ;;
           esac
 
           echo "TARGET_ENV=${TARGET_ENV}" >> "${GITHUB_ENV}"
           echo "APP_NAME=${APP_NAME}" >> "${GITHUB_ENV}"
           echo "APP_PORT=${APP_PORT}" >> "${GITHUB_ENV}"
+          echo "APP_CANDIDATE_PORT=${APP_CANDIDATE_PORT}" >> "${GITHUB_ENV}"
           echo "IMAGE=ghcr.io/${{ github.repository_owner }}/springboot-cicd-demo:${IMAGE_TAG}" >> "${GITHUB_ENV}"
 
       - name: Summarize deployment plan
@@ -148,6 +169,7 @@ jobs:
             echo "- Image: ${{ env.IMAGE }}"
             echo "- Container: ${{ env.APP_NAME }}"
             echo "- Port: ${{ env.APP_PORT }}"
+            echo "- Candidate port: ${{ env.APP_CANDIDATE_PORT }}"
             if [ "${{ github.event.inputs.environment }}" = "prod" ]; then
               echo "- Change number: ${{ github.event.inputs.change_number }}"
             fi
@@ -168,8 +190,10 @@ jobs:
             APP_DIR="/opt/springboot-cicd-demo"
             APP_NAME="${{ env.APP_NAME }}"
             APP_PORT="${{ env.APP_PORT }}"
+            APP_CANDIDATE_PORT="${{ env.APP_CANDIDATE_PORT }}"
             IMAGE="${{ env.IMAGE }}"
             PREVIOUS_IMAGE=""
+            CANDIDATE_NAME="${APP_NAME}-candidate"
 
             mkdir -p "${APP_DIR}"
 
@@ -184,6 +208,29 @@ jobs:
 
             docker pull "${IMAGE}"
 
+            docker rm -f "${CANDIDATE_NAME}" || true
+
+            docker run -d \
+              --name "${CANDIDATE_NAME}" \
+              --restart unless-stopped \
+              -p "127.0.0.1:${APP_CANDIDATE_PORT}:8080" \
+              "${IMAGE}"
+
+            for i in $(seq 1 12); do
+              if curl -fsS "http://127.0.0.1:${APP_CANDIDATE_PORT}/actuator/health" | grep '"status":"UP"' >/dev/null; then
+                echo "Candidate application is healthy."
+                break
+              fi
+              sleep 5
+
+              if [ "${i}" -eq 12 ]; then
+                echo "Candidate health check failed."
+                docker logs "${CANDIDATE_NAME}" || true
+                docker rm -f "${CANDIDATE_NAME}" || true
+                exit 1
+              fi
+            done
+
             docker rm -f "${APP_NAME}" || true
 
             docker run -d \
@@ -191,6 +238,8 @@ jobs:
               --restart unless-stopped \
               -p "${APP_PORT}:8080" \
               "${IMAGE}"
+
+            docker rm -f "${CANDIDATE_NAME}" || true
 
             for i in $(seq 1 12); do
               if curl -fsS "http://127.0.0.1:${APP_PORT}/actuator/health" | grep '"status":"UP"' >/dev/null; then
@@ -200,7 +249,7 @@ jobs:
               sleep 5
             done
 
-            echo "Health check failed."
+            echo "Final health check failed."
             docker logs "${APP_NAME}" || true
 
             if [ -n "${PREVIOUS_IMAGE}" ]; then
