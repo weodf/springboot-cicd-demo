@@ -1,0 +1,201 @@
+name: Deploy To K8s
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - dev
+          - sit
+          - uat
+          - prod
+      image_tag:
+        description: Image tag to deploy
+        required: true
+        default: main
+      change_number:
+        description: Change number for production deployments
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-k8s-${{ github.event.inputs.environment }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment: ${{ github.event.inputs.environment }}
+    runs-on: ubuntu-latest
+    env:
+      VM_HOST: ${{ secrets.VM_HOST }}
+      VM_USER: ${{ secrets.VM_USER }}
+      VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+      VM_SSH_PASSPHRASE: ${{ secrets.VM_SSH_PASSPHRASE }}
+      VM_PORT: ${{ secrets.VM_PORT }}
+      GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+
+    steps:
+      - name: Validate deployment request
+        env:
+          TARGET_ENV: ${{ github.event.inputs.environment }}
+          IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+          CHANGE_NUMBER: ${{ github.event.inputs.change_number }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -eu
+
+          test -n "${TARGET_ENV}" || { echo "environment is required"; exit 1; }
+          test -n "${IMAGE_TAG}" || { echo "image_tag is required"; exit 1; }
+
+          case "${TARGET_ENV}" in
+            dev)
+              case "${REF_NAME}" in
+                feature/*|main) ;;
+                *)
+                  echo "dev deployments are only allowed from main or feature/*"
+                  exit 1
+                  ;;
+              esac
+              ;;
+            sit|uat)
+              case "${REF_NAME}" in
+                main|master|release/*) ;;
+                *)
+                  echo "${TARGET_ENV} deployments are only allowed from main, master, or release/*"
+                  exit 1
+                  ;;
+              esac
+
+              case "${IMAGE_TAG}" in
+                main|"")
+                  echo "${TARGET_ENV} deployments must use a fixed image tag, not main"
+                  exit 1
+                  ;;
+              esac
+              ;;
+            prod)
+              case "${REF_NAME}" in
+                release/*) ;;
+                *)
+                  echo "prod deployments are only allowed from release/*"
+                  exit 1
+                  ;;
+              esac
+
+              test -n "${CHANGE_NUMBER}" || { echo "change_number is required for prod"; exit 1; }
+
+              case "${CHANGE_NUMBER}" in
+                CHG-*) ;;
+                *)
+                  echo "change_number must start with CHG- for prod"
+                  exit 1
+                  ;;
+              esac
+
+              case "${IMAGE_TAG}" in
+                main|"")
+                  echo "prod deployments must use a fixed image tag, not main"
+                  exit 1
+                  ;;
+              esac
+              ;;
+            *)
+              echo "unsupported environment: ${TARGET_ENV}"
+              exit 1
+              ;;
+          esac
+
+      - name: Validate deployment secrets
+        run: |
+          set -eu
+
+          test -n "${VM_HOST}" || { echo "VM_HOST is empty"; exit 1; }
+          test -n "${VM_USER}" || { echo "VM_USER is empty"; exit 1; }
+          test -n "${VM_SSH_KEY}" || { echo "VM_SSH_KEY is empty"; exit 1; }
+          test -n "${GHCR_USERNAME}" || { echo "GHCR_USERNAME is empty"; exit 1; }
+          test -n "${GHCR_TOKEN}" || { echo "GHCR_TOKEN is empty"; exit 1; }
+
+      - name: Prepare environment mapping
+        env:
+          TARGET_ENV: ${{ github.event.inputs.environment }}
+          IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+        run: |
+          set -eu
+
+          echo "TARGET_ENV=${TARGET_ENV}" >> "${GITHUB_ENV}"
+          echo "VALUES_FILE=values-${TARGET_ENV}.yaml" >> "${GITHUB_ENV}"
+          echo "RELEASE_NAME=springboot-cicd-demo-${TARGET_ENV}" >> "${GITHUB_ENV}"
+          echo "IMAGE=ghcr.io/${{ github.repository_owner }}/springboot-cicd-demo:${IMAGE_TAG}" >> "${GITHUB_ENV}"
+
+      - name: Summarize deployment plan
+        run: |
+          {
+            echo "### K8s Deployment Plan"
+            echo "- Environment: ${{ github.event.inputs.environment }}"
+            echo "- Namespace: ${{ env.TARGET_ENV }}"
+            echo "- Source ref: ${{ github.ref_name }}"
+            echo "- Image tag: ${{ github.event.inputs.image_tag }}"
+            echo "- Image: ${{ env.IMAGE }}"
+            echo "- Release: ${{ env.RELEASE_NAME }}"
+            echo "- Values file: ${{ env.VALUES_FILE }}"
+            if [ "${{ github.event.inputs.environment }}" = "prod" ]; then
+              echo "- Change number: ${{ github.event.inputs.change_number }}"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Deploy selected GHCR image to k3s
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: "${{ secrets.VM_HOST }}"
+          username: "${{ secrets.VM_USER }}"
+          key: "${{ secrets.VM_SSH_KEY }}"
+          passphrase: "${{ secrets.VM_SSH_PASSPHRASE }}"
+          port: "${{ secrets.VM_PORT }}"
+          debug: true
+          script: |
+            set -eu
+
+            APP_DIR="/opt/springboot-cicd-demo-k8s"
+            REPO_URL="${{ github.server_url }}/${{ github.repository }}.git"
+            REF_NAME="${{ github.ref_name }}"
+            TARGET_ENV="${{ env.TARGET_ENV }}"
+            VALUES_FILE="${{ env.VALUES_FILE }}"
+            RELEASE_NAME="${{ env.RELEASE_NAME }}"
+            IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+            GHCR_USERNAME="${{ secrets.GHCR_USERNAME }}"
+            GHCR_TOKEN="${{ secrets.GHCR_TOKEN }}"
+
+            mkdir -p "${APP_DIR}"
+
+            if [ ! -d "${APP_DIR}/.git" ]; then
+              git clone "${REPO_URL}" "${APP_DIR}"
+            fi
+
+            git -C "${APP_DIR}" fetch --all --prune
+            git -C "${APP_DIR}" checkout "${REF_NAME}"
+            git -C "${APP_DIR}" pull --ff-only origin "${REF_NAME}"
+
+            kubectl get namespace "${TARGET_ENV}" >/dev/null 2>&1 || kubectl create namespace "${TARGET_ENV}"
+
+            kubectl create secret docker-registry ghcr-creds \
+              --namespace "${TARGET_ENV}" \
+              --docker-server=ghcr.io \
+              --docker-username="${GHCR_USERNAME}" \
+              --docker-password="${GHCR_TOKEN}" \
+              --docker-email=ci@example.com \
+              --dry-run=client -o yaml | kubectl apply -f -
+
+            helm upgrade --install "${RELEASE_NAME}" "${APP_DIR}/helm/springboot-cicd-demo" \
+              -n "${TARGET_ENV}" \
+              -f "${APP_DIR}/helm/springboot-cicd-demo/${VALUES_FILE}" \
+              --set image.tag="${IMAGE_TAG}"
+
+            kubectl rollout status deployment/"${RELEASE_NAME}" -n "${TARGET_ENV}" --timeout=180s
+            kubectl get deploy,pods,svc -n "${TARGET_ENV}"

@@ -2,13 +2,10 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/weodf/springboot-cicd-demo
-  pullPolicy: IfNotPresent
   tag: main
+  pullPolicy: IfNotPresent
 
 imagePullSecrets: []
-
-nameOverride: ""
-fullnameOverride: ""
 
 service:
   type: ClusterIP
@@ -20,29 +17,23 @@ ingress:
   enabled: false
   className: ""
   annotations: {}
-  hosts:
-    - host: springboot-cicd-demo.local
-      paths:
-        - path: /
-          pathType: Prefix
+  hosts: []
   tls: []
 
 resources: {}
 
-podAnnotations: {}
-
 env: []
 
 livenessProbe:
-  path: /actuator/health
+  path: /actuator/health/liveness
   initialDelaySeconds: 20
   periodSeconds: 10
   timeoutSeconds: 3
   failureThreshold: 6
 
 readinessProbe:
-  path: /actuator/health
+  path: /actuator/health/readiness
   initialDelaySeconds: 10
   periodSeconds: 5
   timeoutSeconds: 3
-  failureThreshold: 6
+  failureThreshold: 12

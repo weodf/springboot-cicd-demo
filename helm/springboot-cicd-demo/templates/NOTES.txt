@@ -1,8 +1,8 @@
-1. Check the deployment:
-   kubectl get pods,svc
+1. Check the release:
+   helm status {{ .Release.Name }} -n {{ .Release.Namespace }}
 
-2. Get the application service:
-   kubectl get svc {{ include "springboot-cicd-demo.fullname" . }}
+2. Check application resources:
+   kubectl get deploy,pods,svc -n {{ .Release.Namespace }}
 
-3. If using port-forward for quick local access:
-   kubectl port-forward svc/{{ include "springboot-cicd-demo.fullname" . }} 8080:{{ .Values.service.port }}
+3. If ingress is disabled, use port-forward for a quick test:
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "springboot-cicd-demo.fullname" . }} 8080:8080

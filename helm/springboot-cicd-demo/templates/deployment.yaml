@@ -11,35 +11,24 @@ spec:
       {{- include "springboot-cicd-demo.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      annotations:
-        {{- toYaml .Values.podAnnotations | nindent 8 }}
       labels:
         {{- include "springboot-cicd-demo.selectorLabels" . | nindent 8 }}
     spec:
-      {{- if .Values.imagePullSecrets }}
+      {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
-        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+        {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-        - name: {{ include "springboot-cicd-demo.name" . }}
+        - name: app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - name: http
-              containerPort: {{ .Values.containerPort }}
-              protocol: TCP
-          {{- if .Values.env }}
+            - containerPort: {{ .Values.containerPort }}
+              name: http
+          {{- with .Values.env }}
           env:
-            {{- toYaml .Values.env | nindent 12 }}
+            {{- toYaml . | nindent 12 }}
           {{- end }}
-          readinessProbe:
-            httpGet:
-              path: {{ .Values.readinessProbe.path }}
-              port: http
-            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
-            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
-            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
-            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
           livenessProbe:
             httpGet:
               path: {{ .Values.livenessProbe.path }}
@@ -48,5 +37,15 @@ spec:
             periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
             timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
             failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.readinessProbe.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          {{- with .Values.resources }}
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
