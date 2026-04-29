@@ -126,6 +126,36 @@ jobs:
           test -n "${GHCR_USERNAME}" || { echo "GHCR_USERNAME is empty"; exit 1; }
           test -n "${GHCR_TOKEN}" || { echo "GHCR_TOKEN is empty"; exit 1; }
 
+      - name: Normalize SSH target
+        run: |
+          set -eu
+
+          VM_HOST_CLEAN="$(printf '%s' "${VM_HOST}" | tr -d '\r' | xargs)"
+          VM_USER_CLEAN="$(printf '%s' "${VM_USER}" | tr -d '\r' | xargs)"
+          VM_PORT_CLEAN="$(printf '%s' "${VM_PORT}" | tr -d '\r' | xargs)"
+
+          test -n "${VM_HOST_CLEAN}" || { echo "VM_HOST is empty after normalization"; exit 1; }
+          test -n "${VM_USER_CLEAN}" || { echo "VM_USER is empty after normalization"; exit 1; }
+          test -n "${VM_PORT_CLEAN}" || { echo "VM_PORT is empty after normalization"; exit 1; }
+
+          case "${VM_USER_CLEAN}" in
+            *[!A-Za-z0-9._-]*)
+              echo "VM_USER contains invalid characters after normalization: ${VM_USER_CLEAN}"
+              exit 1
+              ;;
+          esac
+
+          case "${VM_PORT_CLEAN}" in
+            ''|*[!0-9]*)
+              echo "VM_PORT must be numeric after normalization: ${VM_PORT_CLEAN}"
+              exit 1
+              ;;
+          esac
+
+          echo "VM_HOST_CLEAN=${VM_HOST_CLEAN}" >> "${GITHUB_ENV}"
+          echo "VM_USER_CLEAN=${VM_USER_CLEAN}" >> "${GITHUB_ENV}"
+          echo "VM_PORT_CLEAN=${VM_PORT_CLEAN}" >> "${GITHUB_ENV}"
+
       - name: Prepare environment mapping
         env:
           TARGET_ENV: ${{ github.event.inputs.environment }}
@@ -186,8 +216,8 @@ jobs:
               -o UserKnownHostsFile=/dev/null \
               -o ConnectTimeout=20 \
               -o BatchMode=no \
-              -p "${VM_PORT}" \
-              "${VM_USER}@${VM_HOST}" \
+              -p "${VM_PORT_CLEAN}" \
+              "${VM_USER_CLEAN}@${VM_HOST_CLEAN}" \
               'echo ssh-preflight-ok && whoami && hostname'
 
       - name: Package Helm chart
@@ -206,9 +236,9 @@ jobs:
               -o UserKnownHostsFile=/dev/null \
               -o ConnectTimeout=20 \
               -o BatchMode=no \
-              -P "${VM_PORT}" \
+              -P "${VM_PORT_CLEAN}" \
               "${RUNNER_TEMP}/springboot-cicd-demo-chart.tgz" \
-              "${VM_USER}@${VM_HOST}:/tmp/springboot-cicd-demo-chart.tgz"
+              "${VM_USER_CLEAN}@${VM_HOST_CLEAN}:/tmp/springboot-cicd-demo-chart.tgz"
 
       - name: Deploy selected GHCR image to k3s
         run: |
@@ -260,6 +290,6 @@ jobs:
               -o UserKnownHostsFile=/dev/null \
               -o ConnectTimeout=20 \
               -o BatchMode=no \
-              -p "${VM_PORT}" \
-              "${VM_USER}@${VM_HOST}" \
+              -p "${VM_PORT_CLEAN}" \
+              "${VM_USER_CLEAN}@${VM_HOST_CLEAN}" \
               'bash /tmp/deploy_k8s_remote.sh'
