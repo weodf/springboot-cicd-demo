@@ -165,10 +165,10 @@ jobs:
           printf '%s\n' "${VM_SSH_KEY}" > "${KEY_FILE}"
           chmod 600 "${KEY_FILE}"
 
-          cat > "${ASKPASS_FILE}" <<EOF
-#!/usr/bin/env bash
-printf '%s\n' '${VM_SSH_PASSPHRASE}'
-EOF
+          {
+            printf '%s\n' '#!/usr/bin/env bash'
+            printf "printf '%%s\\n' '%s'\n" "${VM_SSH_PASSPHRASE}"
+          } > "${ASKPASS_FILE}"
           chmod 700 "${ASKPASS_FILE}"
           echo "SSH_KEY_FILE=${KEY_FILE}" >> "${GITHUB_ENV}"
           echo "SSH_ASKPASS_FILE=${ASKPASS_FILE}" >> "${GITHUB_ENV}"
@@ -214,6 +214,46 @@ EOF
         run: |
           set -eu
 
+          REMOTE_SCRIPT="${RUNNER_TEMP}/deploy_k8s_remote.sh"
+
+          {
+            printf '%s\n' 'set -eu'
+            printf '%s\n' 'APP_DIR="/opt/springboot-cicd-demo-k8s"'
+            printf "TARGET_ENV='%s'\n" "${TARGET_ENV}"
+            printf "VALUES_FILE='%s'\n" "${VALUES_FILE}"
+            printf "RELEASE_NAME='%s'\n" "${RELEASE_NAME}"
+            printf "IMAGE_TAG='%s'\n" "${{ github.event.inputs.image_tag }}"
+            printf "GHCR_USERNAME='%s'\n" "${GHCR_USERNAME}"
+            printf "GHCR_TOKEN='%s'\n" "${GHCR_TOKEN}"
+            printf '%s\n' 'mkdir -p "${APP_DIR}"'
+            printf '%s\n' 'rm -rf "${APP_DIR}/helm"'
+            printf '%s\n' 'tar -xzf /tmp/springboot-cicd-demo-chart.tgz -C "${APP_DIR}"'
+            printf '%s\n' 'kubectl get namespace "${TARGET_ENV}" >/dev/null 2>&1 || kubectl create namespace "${TARGET_ENV}"'
+            printf '%s\n' 'kubectl create secret docker-registry ghcr-creds \'
+            printf '%s\n' '  --namespace "${TARGET_ENV}" \'
+            printf '%s\n' '  --docker-server=ghcr.io \'
+            printf '%s\n' '  --docker-username="${GHCR_USERNAME}" \'
+            printf '%s\n' '  --docker-password="${GHCR_TOKEN}" \'
+            printf '%s\n' '  --docker-email=ci@example.com \'
+            printf '%s\n' '  --dry-run=client -o yaml | kubectl apply -f -'
+            printf '%s\n' 'helm upgrade --install "${RELEASE_NAME}" "${APP_DIR}/helm/springboot-cicd-demo" \'
+            printf '%s\n' '  -n "${TARGET_ENV}" \'
+            printf '%s\n' '  -f "${APP_DIR}/helm/springboot-cicd-demo/${VALUES_FILE}" \'
+            printf '%s\n' '  --set image.tag="${IMAGE_TAG}"'
+            printf '%s\n' 'kubectl rollout status deployment/"${RELEASE_NAME}" -n "${TARGET_ENV}" --timeout=180s'
+            printf '%s\n' 'kubectl get deploy,pods,svc -n "${TARGET_ENV}"'
+          } > "${REMOTE_SCRIPT}"
+
+          DISPLAY=/tmp/ssh-askpass SSH_ASKPASS="${SSH_ASKPASS_FILE}" SSH_ASKPASS_REQUIRE=force setsid -w \
+          scp -i "${SSH_KEY_FILE}" \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=20 \
+              -o BatchMode=no \
+              -P "${VM_PORT}" \
+              "${REMOTE_SCRIPT}" \
+              "${VM_USER}@${VM_HOST}:/tmp/deploy_k8s_remote.sh"
+
           DISPLAY=/tmp/ssh-askpass SSH_ASKPASS="${SSH_ASKPASS_FILE}" SSH_ASKPASS_REQUIRE=force setsid -w \
           ssh -i "${SSH_KEY_FILE}" \
               -o StrictHostKeyChecking=no \
@@ -221,36 +261,5 @@ EOF
               -o ConnectTimeout=20 \
               -o BatchMode=no \
               -p "${VM_PORT}" \
-              "${VM_USER}@${VM_HOST}" <<EOF
-          set -eu
-
-          APP_DIR="/opt/springboot-cicd-demo-k8s"
-          TARGET_ENV="${TARGET_ENV}"
-          VALUES_FILE="${VALUES_FILE}"
-          RELEASE_NAME="${RELEASE_NAME}"
-          IMAGE_TAG="${{ github.event.inputs.image_tag }}"
-          GHCR_USERNAME="${GHCR_USERNAME}"
-          GHCR_TOKEN="${GHCR_TOKEN}"
-
-          mkdir -p "\${APP_DIR}"
-          rm -rf "\${APP_DIR}/helm"
-          tar -xzf /tmp/springboot-cicd-demo-chart.tgz -C "\${APP_DIR}"
-
-          kubectl get namespace "\${TARGET_ENV}" >/dev/null 2>&1 || kubectl create namespace "\${TARGET_ENV}"
-
-          kubectl create secret docker-registry ghcr-creds \
-            --namespace "\${TARGET_ENV}" \
-            --docker-server=ghcr.io \
-            --docker-username="\${GHCR_USERNAME}" \
-            --docker-password="\${GHCR_TOKEN}" \
-            --docker-email=ci@example.com \
-            --dry-run=client -o yaml | kubectl apply -f -
-
-          helm upgrade --install "\${RELEASE_NAME}" "\${APP_DIR}/helm/springboot-cicd-demo" \
-            -n "\${TARGET_ENV}" \
-            -f "\${APP_DIR}/helm/springboot-cicd-demo/\${VALUES_FILE}" \
-            --set image.tag="\${IMAGE_TAG}"
-
-          kubectl rollout status deployment/"\${RELEASE_NAME}" -n "\${TARGET_ENV}" --timeout=180s
-          kubectl get deploy,pods,svc -n "\${TARGET_ENV}"
-EOF
+              "${VM_USER}@${VM_HOST}" \
+              'bash /tmp/deploy_k8s_remote.sh'
