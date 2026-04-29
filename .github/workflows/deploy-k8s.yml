@@ -42,6 +42,9 @@ jobs:
       GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Validate deployment request
         env:
           TARGET_ENV: ${{ github.event.inputs.environment }}
@@ -119,6 +122,7 @@ jobs:
           test -n "${VM_HOST}" || { echo "VM_HOST is empty"; exit 1; }
           test -n "${VM_USER}" || { echo "VM_USER is empty"; exit 1; }
           test -n "${VM_SSH_KEY}" || { echo "VM_SSH_KEY is empty"; exit 1; }
+          test -n "${VM_PORT}" || { echo "VM_PORT is empty"; exit 1; }
           test -n "${GHCR_USERNAME}" || { echo "GHCR_USERNAME is empty"; exit 1; }
           test -n "${GHCR_TOKEN}" || { echo "GHCR_TOKEN is empty"; exit 1; }
 
@@ -150,52 +154,103 @@ jobs:
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
 
+      - name: Prepare SSH authentication
+        run: |
+          set -eu
+
+          KEY_FILE="${RUNNER_TEMP}/deploy_key"
+          ASKPASS_FILE="${RUNNER_TEMP}/ssh_askpass.sh"
+          PUBKEY_FILE="${RUNNER_TEMP}/deploy_key.pub"
+
+          printf '%s\n' "${VM_SSH_KEY}" > "${KEY_FILE}"
+          chmod 600 "${KEY_FILE}"
+
+          cat > "${ASKPASS_FILE}" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' '${VM_SSH_PASSPHRASE}'
+EOF
+          chmod 700 "${ASKPASS_FILE}"
+          echo "SSH_KEY_FILE=${KEY_FILE}" >> "${GITHUB_ENV}"
+          echo "SSH_ASKPASS_FILE=${ASKPASS_FILE}" >> "${GITHUB_ENV}"
+
+          ssh-keygen -y -P "${VM_SSH_PASSPHRASE}" -f "${KEY_FILE}" > "${PUBKEY_FILE}"
+          ssh-keygen -lf "${PUBKEY_FILE}"
+
+      - name: Verify SSH access to k3s host
+        run: |
+          set -eu
+
+          DISPLAY=/tmp/ssh-askpass SSH_ASKPASS="${SSH_ASKPASS_FILE}" SSH_ASKPASS_REQUIRE=force setsid -w \
+          ssh -i "${SSH_KEY_FILE}" \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=20 \
+              -o BatchMode=no \
+              -p "${VM_PORT}" \
+              "${VM_USER}@${VM_HOST}" \
+              'echo ssh-preflight-ok && whoami && hostname'
+
+      - name: Package Helm chart
+        run: |
+          set -eu
+
+          tar -C "${GITHUB_WORKSPACE}" -czf "${RUNNER_TEMP}/springboot-cicd-demo-chart.tgz" helm/springboot-cicd-demo
+
+      - name: Upload Helm chart to k3s host
+        run: |
+          set -eu
+
+          DISPLAY=/tmp/ssh-askpass SSH_ASKPASS="${SSH_ASKPASS_FILE}" SSH_ASKPASS_REQUIRE=force setsid -w \
+          scp -i "${SSH_KEY_FILE}" \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=20 \
+              -o BatchMode=no \
+              -P "${VM_PORT}" \
+              "${RUNNER_TEMP}/springboot-cicd-demo-chart.tgz" \
+              "${VM_USER}@${VM_HOST}:/tmp/springboot-cicd-demo-chart.tgz"
+
       - name: Deploy selected GHCR image to k3s
-        uses: appleboy/ssh-action@v1.2.5
-        with:
-          host: "${{ secrets.VM_HOST }}"
-          username: "${{ secrets.VM_USER }}"
-          key: "${{ secrets.VM_SSH_KEY }}"
-          passphrase: "${{ secrets.VM_SSH_PASSPHRASE }}"
-          port: "${{ secrets.VM_PORT }}"
-          debug: true
-          script: |
-            set -eu
+        run: |
+          set -eu
 
-            APP_DIR="/opt/springboot-cicd-demo-k8s"
-            REPO_URL="${{ github.server_url }}/${{ github.repository }}.git"
-            REF_NAME="${{ github.ref_name }}"
-            TARGET_ENV="${{ env.TARGET_ENV }}"
-            VALUES_FILE="${{ env.VALUES_FILE }}"
-            RELEASE_NAME="${{ env.RELEASE_NAME }}"
-            IMAGE_TAG="${{ github.event.inputs.image_tag }}"
-            GHCR_USERNAME="${{ secrets.GHCR_USERNAME }}"
-            GHCR_TOKEN="${{ secrets.GHCR_TOKEN }}"
+          DISPLAY=/tmp/ssh-askpass SSH_ASKPASS="${SSH_ASKPASS_FILE}" SSH_ASKPASS_REQUIRE=force setsid -w \
+          ssh -i "${SSH_KEY_FILE}" \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=20 \
+              -o BatchMode=no \
+              -p "${VM_PORT}" \
+              "${VM_USER}@${VM_HOST}" <<EOF
+          set -eu
 
-            mkdir -p "${APP_DIR}"
+          APP_DIR="/opt/springboot-cicd-demo-k8s"
+          TARGET_ENV="${TARGET_ENV}"
+          VALUES_FILE="${VALUES_FILE}"
+          RELEASE_NAME="${RELEASE_NAME}"
+          IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+          GHCR_USERNAME="${GHCR_USERNAME}"
+          GHCR_TOKEN="${GHCR_TOKEN}"
 
-            if [ ! -d "${APP_DIR}/.git" ]; then
-              git clone "${REPO_URL}" "${APP_DIR}"
-            fi
+          mkdir -p "\${APP_DIR}"
+          rm -rf "\${APP_DIR}/helm"
+          tar -xzf /tmp/springboot-cicd-demo-chart.tgz -C "\${APP_DIR}"
 
-            git -C "${APP_DIR}" fetch --all --prune
-            git -C "${APP_DIR}" checkout "${REF_NAME}"
-            git -C "${APP_DIR}" pull --ff-only origin "${REF_NAME}"
+          kubectl get namespace "\${TARGET_ENV}" >/dev/null 2>&1 || kubectl create namespace "\${TARGET_ENV}"
 
-            kubectl get namespace "${TARGET_ENV}" >/dev/null 2>&1 || kubectl create namespace "${TARGET_ENV}"
+          kubectl create secret docker-registry ghcr-creds \
+            --namespace "\${TARGET_ENV}" \
+            --docker-server=ghcr.io \
+            --docker-username="\${GHCR_USERNAME}" \
+            --docker-password="\${GHCR_TOKEN}" \
+            --docker-email=ci@example.com \
+            --dry-run=client -o yaml | kubectl apply -f -
 
-            kubectl create secret docker-registry ghcr-creds \
-              --namespace "${TARGET_ENV}" \
-              --docker-server=ghcr.io \
-              --docker-username="${GHCR_USERNAME}" \
-              --docker-password="${GHCR_TOKEN}" \
-              --docker-email=ci@example.com \
-              --dry-run=client -o yaml | kubectl apply -f -
+          helm upgrade --install "\${RELEASE_NAME}" "\${APP_DIR}/helm/springboot-cicd-demo" \
+            -n "\${TARGET_ENV}" \
+            -f "\${APP_DIR}/helm/springboot-cicd-demo/\${VALUES_FILE}" \
+            --set image.tag="\${IMAGE_TAG}"
 
-            helm upgrade --install "${RELEASE_NAME}" "${APP_DIR}/helm/springboot-cicd-demo" \
-              -n "${TARGET_ENV}" \
-              -f "${APP_DIR}/helm/springboot-cicd-demo/${VALUES_FILE}" \
-              --set image.tag="${IMAGE_TAG}"
-
-            kubectl rollout status deployment/"${RELEASE_NAME}" -n "${TARGET_ENV}" --timeout=180s
-            kubectl get deploy,pods,svc -n "${TARGET_ENV}"
+          kubectl rollout status deployment/"\${RELEASE_NAME}" -n "\${TARGET_ENV}" --timeout=180s
+          kubectl get deploy,pods,svc -n "\${TARGET_ENV}"
+EOF
