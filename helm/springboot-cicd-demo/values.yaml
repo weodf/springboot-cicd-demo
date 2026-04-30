@@ -1,5 +1,11 @@
 replicaCount: 1
 
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
 image:
   repository: ghcr.io/weodf/springboot-cicd-demo
   tag: main
